@@ -1,0 +1,6 @@
+FROM gcc:latest
+COPY client.c shared.h /app/
+WORKDIR /app
+RUN gcc client.c -o client
+# Teniamo il client acceso per poterci entrare manualmente
+CMD ["sleep", "infinity"]

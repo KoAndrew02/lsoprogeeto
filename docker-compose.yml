@@ -1,0 +1,17 @@
+version: '3.8'
+services:
+  server-tris:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    ports:
+      - "8080:8080" # Espone la porta 8080 sul tuo PC
+
+  client-giocatore:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    depends_on:
+      - server-tris
+    stdin_open: true # Permette l'interazione da terminale
+    tty: true
