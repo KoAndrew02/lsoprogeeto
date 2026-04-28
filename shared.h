@@ -1,15 +1,23 @@
 #ifndef SHARED_H
 #define SHARED_H
 
-#define PORT 8080
-#define BUFFER_SIZE 1024
+#include <stdint.h>
 
-// Questa è la "scatola" che viaggerà sulla rete
+#define PORT 8081
+#define BUFFER_SIZE 256
+
 typedef struct {
-    int tipo_messaggio; // Es: 0 = "Voglio giocare", 1 = "Mossa", 2 = "Aggiornamento stato"
-    int mossa_x;        // Coordinata X del Tris
-    int mossa_y;        // Coordinata Y del Tris
-    char payload[BUFFER_SIZE]; // Testo generico (es. "Sei in attesa", "Hai vinto!")
+    int32_t tipo_messaggio; 
+    // 1 = Mossa
+    // 2 = Testo di stato
+    // 3 = Hai Vinto
+    // 4 = Hai Perso
+    // 5 = Pareggio
+    // 6 = Voglio Rigiocare (Client -> Server)
+    // 8 = Pulisci Griglia (Server -> Client)
+    int32_t mossa_x;
+    int32_t mossa_y;
+    char payload[BUFFER_SIZE];
 } PacchettoRete;
 
 #endif
