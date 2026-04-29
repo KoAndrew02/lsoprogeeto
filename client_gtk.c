@@ -5,210 +5,221 @@
 #include <string.h>
 #include <unistd.h>
 #include <winsock2.h> 
+#include <math.h> 
 #include "shared.h"
 
-typedef struct {
-    int riga;
-    int colonna;
-    GtkWidget *button;
-} DatiBottone;
+typedef struct { int r; int c; GtkWidget *b; } DatiB;
 
 int client_socket;
-GtkWidget *label_stato;
-GtkWidget *grid_gioco;
-GtkWidget *main_window;
-GtkWidget *btn_rigioca; // Nuovo tasto per la rivincita
-GtkWidget *btn_esci;    // Nuovo tasto per uscire
+int id_p = -1;
+char mio_s[10] = ""; 
+int mio_t = 0;
 
-DatiBottone griglia_gui[3][3];
-char mio_simbolo[10] = ""; 
-int mio_turno = 0;
+GtkWidget *win, *stack, *lbl_s, *grid_g, *entry_id, *entry_chat;
+GtkTextBuffer *buf_lobby, *buf_chat;
+DatiB griglia[3][3];
 
-void pulisci_griglia_gui() {
-    for (int r = 0; r < 3; r++) {
-        for (int c = 0; c < 3; c++) {
-            gtk_button_set_image(GTK_BUTTON(griglia_gui[r][c].button), NULL);
-            gtk_button_set_label(GTK_BUTTON(griglia_gui[r][c].button), "");
-            gtk_widget_set_sensitive(griglia_gui[r][c].button, TRUE);
-        }
+// --- DISEGNO SFONDO (STESSO PER TUTTO) ---
+gboolean on_draw(GtkWidget *w, cairo_t *cr, gpointer d) {
+    int width = gtk_widget_get_allocated_width(w);
+    int height = gtk_widget_get_allocated_height(w);
+    cairo_set_source_rgb(cr, 0.0, 0.0, 0.1); cairo_paint(cr);
+    srand(42);
+    for (int i = 0; i < 100; i++) {
+        double x = rand() % width, y = rand() % height;
+        cairo_set_source_rgb(cr, 1.0, 1.0, (rand()%2));
+        cairo_arc(cr, x, y, (rand()%2)+1, 0, 2*M_PI); cairo_fill(cr);
     }
+    cairo_set_source_rgb(cr, 1.0, 0.9, 0.3);
+    cairo_arc(cr, width-120, 120, 70, 0, 2*M_PI); cairo_fill(cr);
+    cairo_set_source_rgb(cr, 0.0, 0.0, 0.1);
+    cairo_arc(cr, width-150, 120, 65, 0, 2*M_PI); cairo_fill(cr);
+    return FALSE;
 }
 
-void imposta_immagine_bottone(GtkWidget *bottone, const char *percorso_file) {
-    GError *error = NULL;
-    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file(percorso_file, &error);
-    if (!pixbuf) return;
-    GdkPixbuf *scaled = gdk_pixbuf_scale_simple(pixbuf, 60, 60, GDK_INTERP_BILINEAR);
-    GtkWidget *image = gtk_image_new_from_pixbuf(scaled);
-    gtk_button_set_label(GTK_BUTTON(bottone), NULL);
-    gtk_button_set_image(GTK_BUTTON(bottone), image);
-    gtk_button_set_always_show_image(GTK_BUTTON(bottone), TRUE);
-    g_object_unref(pixbuf); g_object_unref(scaled);
+void imposta_img(GtkWidget *b, const char *path) {
+    GdkPixbuf *p = gdk_pixbuf_new_from_file(path, NULL);
+    if (!p) return;
+    GdkPixbuf *s = gdk_pixbuf_scale_simple(p, 60, 60, GDK_INTERP_BILINEAR);
+    gtk_button_set_image(GTK_BUTTON(b), gtk_image_new_from_pixbuf(s));
+    g_object_unref(p); g_object_unref(s);
 }
 
-// --- AZIONI DEI NUOVI BOTTONI ---
-void on_btn_rigioca_clicked(GtkWidget *widget, gpointer data) {
-    PacchettoRete req;
-    memset(&req, 0, sizeof(PacchettoRete));
-    req.tipo_messaggio = 6; // Dico al server che voglio rigiocare
-    send(client_socket, (char*)&req, sizeof(PacchettoRete), 0);
+// --- AZIONI CHAT ---
+void invia_chat(GtkEntry *e, gpointer d) {
+    const char *txt = gtk_entry_get_text(e);
+    if(strlen(txt) == 0) return;
+    PacchettoRete p; memset(&p, 0, sizeof(p));
+    p.tipo_messaggio = 21; strcpy(p.payload, txt);
+    send(client_socket, (char*)&p, sizeof(p), 0);
     
-    gtk_widget_set_sensitive(btn_rigioca, FALSE); // Disattivo il tasto dopo averlo premuto
+    GtkTextIter iter; gtk_text_buffer_get_end_iter(buf_chat, &iter);
+    char me[300]; sprintf(me, "IO: %s\n", txt);
+    gtk_text_buffer_insert(buf_chat, &iter, me, -1);
+    gtk_entry_set_text(e, "");
 }
 
-void on_btn_esci_clicked(GtkWidget *widget, gpointer data) {
-    gtk_main_quit(); // Chiude il gioco correttamente
+// --- AZIONI GIOCO ---
+void on_crea(GtkWidget *w, gpointer d) { PacchettoRete p; memset(&p, 0, sizeof(p)); p.tipo_messaggio=10; send(client_socket,(char*)&p,sizeof(p),0); }
+void on_join(GtkWidget *w, gpointer d) { 
+    PacchettoRete p; memset(&p, 0, sizeof(p)); p.tipo_messaggio=11; 
+    p.id_partita = atoi(gtk_entry_get_text(GTK_ENTRY(entry_id))); send(client_socket,(char*)&p,sizeof(p),0); 
 }
-// --------------------------------
+void on_esc(GtkWidget *w, gpointer d) { 
+    PacchettoRete p; memset(&p, 0, sizeof(p)); p.tipo_messaggio=16; send(client_socket,(char*)&p,sizeof(p),0);
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), "lobby");
+}
 
-gboolean gestisci_messaggio_server(gpointer data) {
+gboolean gestisci_rete(gpointer data) {
     PacchettoRete *p = (PacchettoRete *)data;
-
-    // Aggiornamento della mossa sulla griglia
-    if (p->tipo_messaggio == 1 || p->tipo_messaggio == 3 || p->tipo_messaggio == 4 || p->tipo_messaggio == 5) { 
-        if (p->mossa_x != -1) {
-            const char *file_avv = (strcmp(mio_simbolo, "★") == 0) ? "luna.png" : "stella.png";
-            if (p->tipo_messaggio != 3) { 
-                imposta_immagine_bottone(griglia_gui[p->mossa_x][p->mossa_y].button, file_avv);
-                gtk_widget_set_sensitive(griglia_gui[p->mossa_x][p->mossa_y].button, FALSE);
-            }
-        }
-        mio_turno = 1;
-        gtk_widget_set_sensitive(grid_gioco, TRUE);
-    } 
-
-    // Messaggi di stato dal Server
-    if (p->tipo_messaggio == 2) { 
-        if (strstr(p->payload, "Stella (★)")) { strcpy(mio_simbolo, "★"); mio_turno = 1; gtk_widget_set_sensitive(grid_gioco, TRUE); } 
-        else if (strstr(p->payload, "Luna (☾)")) { strcpy(mio_simbolo, "☾"); mio_turno = 0; gtk_widget_set_sensitive(grid_gioco, FALSE); }
-        if (strstr(p->payload, "tocca a te")) { mio_turno = 1; gtk_widget_set_sensitive(grid_gioco, TRUE); }
+    if (p->id_partita != -1) {
+        id_p = p->id_partita; char t[50]; sprintf(t, "Tris Stellare - Stanza %d", id_p);
+        gtk_window_set_title(GTK_WINDOW(win), t);
     }
-    else if (p->tipo_messaggio == 8) {
-        // Il server ordina di pulire la griglia per la nuova partita
-        pulisci_griglia_gui();
-        gtk_widget_set_sensitive(grid_gioco, FALSE);
+    if (p->tipo_messaggio == 20) { // Lobby
+        GtkTextIter it; gtk_text_buffer_get_end_iter(buf_lobby, &it);
+        gtk_text_buffer_insert(buf_lobby, &it, p->payload, -1); gtk_text_buffer_insert(buf_lobby, &it, "\n", -1);
     }
-
-    // --- GESTIONE FINE PARTITA NELLA GUI ---
-    if (p->tipo_messaggio == 3) { // Vittoria
-        gtk_label_set_text(GTK_LABEL(label_stato), "Hai Vinto! Clicca su Crea Partita.");
-        gtk_widget_set_sensitive(grid_gioco, FALSE);
-        gtk_button_set_label(GTK_BUTTON(btn_rigioca), "Crea Partita");
-        gtk_widget_set_sensitive(btn_rigioca, TRUE);
-    } 
-    else if (p->tipo_messaggio == 4) { // Sconfitta
-        gtk_label_set_text(GTK_LABEL(label_stato), "Hai Perso! Devi cliccare su Esci.");
-        gtk_widget_set_sensitive(grid_gioco, FALSE);
-        gtk_widget_set_sensitive(btn_rigioca, FALSE); // Il perdente NON può rigiocare
-    } 
-    else if (p->tipo_messaggio == 5) { // Pareggio
-        gtk_label_set_text(GTK_LABEL(label_stato), "Pareggio! Clicca su Rivincita.");
-        gtk_widget_set_sensitive(grid_gioco, FALSE);
-        gtk_button_set_label(GTK_BUTTON(btn_rigioca), "Rivincita");
-        gtk_widget_set_sensitive(btn_rigioca, TRUE);
-    } 
-    else {
-        // Messaggio normale
-        gtk_label_set_text(GTK_LABEL(label_stato), p->payload);
+    else if (p->tipo_messaggio == 21) { // Chat Gioco
+        GtkTextIter it; gtk_text_buffer_get_end_iter(buf_chat, &it);
+        char him[300]; sprintf(him, "AVV: %s\n", p->payload);
+        gtk_text_buffer_insert(buf_chat, &it, him, -1);
+    }
+    else if (p->tipo_messaggio == 14) { 
+        gtk_stack_set_visible_child_name(GTK_STACK(stack), "gioco");
+        gtk_text_buffer_set_text(buf_chat, "--- Inizio Chat ---\n", -1);
+    }
+    else if (p->tipo_messaggio == 12) {
+        GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(win), GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO, "Sfida in arrivo! Accetti?");
+        int r = gtk_dialog_run(GTK_DIALOG(d)); gtk_widget_destroy(d);
+        PacchettoRete resp; memset(&resp, 0, sizeof(resp)); resp.tipo_messaggio=13; resp.mossa_x=(r==GTK_RESPONSE_YES); send(client_socket,(char*)&resp,sizeof(resp),0);
+    }
+    else if (p->tipo_messaggio == 1) { // Mossa avversario
+        imposta_img(griglia[p->mossa_x][p->mossa_y].b, (strcmp(mio_s, "★")==0)?"luna.png":"stella.png");
+        mio_t = 1; gtk_widget_set_sensitive(grid_g, TRUE);
+    }
+    else if (p->tipo_messaggio == 3 || p->tipo_messaggio == 4 || p->tipo_messaggio == 5) {
+        GtkWidget *d = gtk_message_dialog_new(GTK_WINDOW(win), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_OK, p->payload);
+        gtk_dialog_run(GTK_DIALOG(d)); gtk_widget_destroy(d);
+        on_esc(NULL, NULL);
     }
 
-    free(p);
-    return G_SOURCE_REMOVE;
+    if (strstr(p->payload, "Stella")) { strcpy(mio_s, "★"); mio_t=1; gtk_widget_set_sensitive(grid_g, TRUE); }
+    else if (strstr(p->payload, "Luna")) { strcpy(mio_s, "☾"); mio_t=0; gtk_widget_set_sensitive(grid_g, FALSE); }
+    
+    gtk_label_set_text(GTK_LABEL(lbl_s), p->payload);
+    free(p); return FALSE;
 }
 
-void *ascolta_server(void *arg) {
+void *thread_ascolto(void *arg) {
     while (1) {
         PacchettoRete *p = malloc(sizeof(PacchettoRete));
-        memset(p, 0, sizeof(PacchettoRete));
-        if (recv(client_socket, (char*)p, sizeof(PacchettoRete), 0) > 0) {
-            g_idle_add(gestisci_messaggio_server, p);
-        } else {
-            free(p); break;
-        }
+        if (recv(client_socket, (char*)p, sizeof(PacchettoRete), 0) > 0) g_idle_add(gestisci_rete, p);
+        else break;
     }
     return NULL;
 }
 
-void on_bottone_cliccato(GtkWidget *widget, gpointer data) {
-    if (!mio_turno) return;
-    DatiBottone *dati = (DatiBottone*)data;
-    PacchettoRete mossa;
-    memset(&mossa, 0, sizeof(PacchettoRete));
-    mossa.tipo_messaggio = 1;
-    mossa.mossa_x = dati->riga;
-    mossa.mossa_y = dati->colonna;
-    send(client_socket, (char*)&mossa, sizeof(PacchettoRete), 0);
-    
-    const char *mio_file = (strcmp(mio_simbolo, "★") == 0) ? "stella.png" : "luna.png";
-    imposta_immagine_bottone(widget, mio_file);
-    gtk_widget_set_sensitive(widget, FALSE);
-    mio_turno = 0;
-    gtk_widget_set_sensitive(grid_gioco, FALSE);
-    gtk_label_set_text(GTK_LABEL(label_stato), "Attesa avversario...");
+void on_click(GtkWidget *w, gpointer d) {
+    if(!mio_t) return;
+    DatiB *db = (DatiB*)d;
+    PacchettoRete p; memset(&p, 0, sizeof(p)); p.tipo_messaggio=1; p.mossa_x=db->r; p.mossa_y=db->c;
+    send(client_socket, (char*)&p, sizeof(p), 0);
+    imposta_img(w, (strcmp(mio_s, "★")==0)?"stella.png":"luna.png");
+    mio_t = 0; gtk_widget_set_sensitive(grid_g, FALSE);
 }
 
 int main(int argc, char *argv[]) {
     WSADATA wsa; WSAStartup(MAKEWORD(2,2), &wsa);
     client_socket = socket(AF_INET, SOCK_STREAM, 0);
-    struct sockaddr_in server_addr;
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
-    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-    if (connect(client_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) return 1;
-
-    pthread_t thread_rete;
-    pthread_create(&thread_rete, NULL, ascolta_server, NULL);
-    pthread_detach(thread_rete);
+    struct sockaddr_in a; a.sin_family=AF_INET; a.sin_port=htons(PORT); a.sin_addr.s_addr=inet_addr("127.0.0.1");
+    connect(client_socket, (struct sockaddr*)&a, sizeof(a));
+    pthread_t th; pthread_create(&th, NULL, thread_ascolto, NULL);
 
     gtk_init(&argc, &argv);
-    main_window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(main_window), "Tris Stellare");
-    gtk_container_set_border_width(GTK_CONTAINER(main_window), 15);
-    g_signal_connect(main_window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+    win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_default_size(GTK_WINDOW(win), 800, 1000);
+    g_signal_connect(win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
-    GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-    gtk_container_add(GTK_CONTAINER(main_window), vbox);
-    
-    label_stato = gtk_label_new("In connessione...");
-    gtk_box_pack_start(GTK_BOX(vbox), label_stato, FALSE, FALSE, 5);
-    
-    grid_gioco = gtk_grid_new();
-    gtk_grid_set_row_spacing(GTK_GRID(grid_gioco), 8);
-    gtk_grid_set_column_spacing(GTK_GRID(grid_gioco), 8);
-    gtk_box_pack_start(GTK_BOX(vbox), grid_gioco, TRUE, TRUE, 5);
+    GtkWidget *ov = gtk_overlay_new();
+    GtkWidget *da = gtk_drawing_area_new(); g_signal_connect(da, "draw", G_CALLBACK(on_draw), NULL);
+    gtk_container_add(GTK_CONTAINER(ov), da);
 
-    // Creazione dei bottoni di gioco
-    for (int r = 0; r < 3; r++) {
-        for (int c = 0; c < 3; c++) {
-            griglia_gui[r][c].riga = r; griglia_gui[r][c].colonna = c;
-            griglia_gui[r][c].button = gtk_button_new();
-            gtk_widget_set_size_request(griglia_gui[r][c].button, 90, 90);
-            g_signal_connect(griglia_gui[r][c].button, "clicked", G_CALLBACK(on_bottone_cliccato), &griglia_gui[r][c]);
-            gtk_grid_attach(GTK_GRID(grid_gioco), griglia_gui[r][c].button, c, r, 1, 1);
-        }
+    stack = gtk_stack_new();
+    gtk_overlay_add_overlay(GTK_OVERLAY(ov), stack);
+    gtk_container_add(GTK_CONTAINER(win), ov);
+
+    // --- LOBBY PAGE ---
+    GtkWidget *box_l = gtk_box_new(GTK_ORIENTATION_VERTICAL, 20);
+    gtk_widget_set_halign(box_l, GTK_ALIGN_CENTER); gtk_widget_set_valign(box_l, GTK_ALIGN_CENTER);
+    
+    GtkWidget *btn_c = gtk_button_new_with_label("Crea Nuova Partita");
+    gtk_widget_set_name(btn_c, "btn-luna");
+    g_signal_connect(btn_c, "clicked", G_CALLBACK(on_crea), NULL);
+
+    GtkWidget *box_j = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    entry_id = gtk_entry_new(); gtk_entry_set_placeholder_text(GTK_ENTRY(entry_id), "ID");
+    GtkWidget *btn_j = gtk_button_new_with_label("Unisciti");
+    gtk_widget_set_name(btn_j, "btn-luna");
+    g_signal_connect(btn_j, "clicked", G_CALLBACK(on_join), NULL);
+    gtk_box_pack_start(GTK_BOX(box_j), entry_id, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(box_j), btn_j, FALSE, FALSE, 0);
+
+    GtkWidget *scr_l = gtk_scrolled_window_new(NULL, NULL); gtk_widget_set_size_request(scr_l, 400, 200);
+    GtkWidget *tv_l = gtk_text_view_new(); buf_lobby = gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv_l));
+    gtk_container_add(GTK_CONTAINER(scr_l), tv_l);
+
+    gtk_box_pack_start(GTK_BOX(box_l), gtk_label_new("LOBBY MULTIPLAYER"), 0,0,0);
+    gtk_box_pack_start(GTK_BOX(box_l), btn_c, 0,0,0);
+    gtk_box_pack_start(GTK_BOX(box_l), box_j, 0,0,0);
+    gtk_box_pack_start(GTK_BOX(box_l), gtk_label_new("Bacheca Annunci:"), 0,0,0);
+    gtk_box_pack_start(GTK_BOX(box_l), scr_l, 1,1,0);
+    gtk_stack_add_named(GTK_STACK(stack), box_l, "lobby");
+
+    // --- GAME PAGE ---
+    GtkWidget *box_g_main = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 30);
+    gtk_widget_set_halign(box_g_main, GTK_ALIGN_CENTER); gtk_widget_set_valign(box_g_main, GTK_ALIGN_CENTER);
+
+    // Sinistra: Griglia
+    GtkWidget *box_grid = gtk_box_new(GTK_ORIENTATION_VERTICAL, 15);
+    lbl_s = gtk_label_new("In attesa...");
+    grid_g = gtk_grid_new(); gtk_grid_set_row_spacing(GTK_GRID(grid_g), 10); gtk_grid_set_column_spacing(GTK_GRID(grid_g), 10);
+    for(int r=0; r<3; r++) for(int c=0; c<3; c++) {
+        griglia[r][c].r=r; griglia[r][c].c=c;
+        griglia[r][c].b = gtk_button_new(); gtk_widget_set_size_request(griglia[r][c].b, 100, 100);
+        g_signal_connect(griglia[r][c].b, "clicked", G_CALLBACK(on_click), &griglia[r][c]);
+        gtk_grid_attach(GTK_GRID(grid_g), griglia[r][c].b, c, r, 1, 1);
     }
+    GtkWidget *btn_e = gtk_button_new_with_label("Esci"); g_signal_connect(btn_e, "clicked", G_CALLBACK(on_esc), NULL);
+    gtk_box_pack_start(GTK_BOX(box_grid), lbl_s, 0,0,0);
+    gtk_box_pack_start(GTK_BOX(box_grid), grid_g, 0,0,0);
+    gtk_box_pack_start(GTK_BOX(box_grid), btn_e, 0,0,0);
 
-    // --- NUOVA SEZIONE: Bottoni in basso ---
-    GtkWidget *hbox_bottoni = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-    gtk_box_set_homogeneous(GTK_BOX(hbox_bottoni), TRUE);
+    // Destra: Chat
+    GtkWidget *box_chat = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    GtkWidget *scr_c = gtk_scrolled_window_new(NULL, NULL); gtk_widget_set_size_request(scr_c, 250, 400);
+    GtkWidget *tv_c = gtk_text_view_new(); buf_chat = gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv_c));
+    gtk_container_add(GTK_CONTAINER(scr_c), tv_c);
+    entry_chat = gtk_entry_new(); gtk_entry_set_placeholder_text(GTK_ENTRY(entry_chat), "Scrivi qui...");
+    g_signal_connect(entry_chat, "activate", G_CALLBACK(invia_chat), NULL);
+    gtk_box_pack_start(GTK_BOX(box_chat), gtk_label_new("CHAT PARTITA"), 0,0,0);
+    gtk_box_pack_start(GTK_BOX(box_chat), scr_c, 1,1,0);
+    gtk_box_pack_start(GTK_BOX(box_chat), entry_chat, 0,0,0);
 
-    btn_rigioca = gtk_button_new_with_label("Crea Partita");
-    gtk_widget_set_sensitive(btn_rigioca, FALSE); // Spento all'inizio
-    g_signal_connect(btn_rigioca, "clicked", G_CALLBACK(on_btn_rigioca_clicked), NULL);
+    gtk_box_pack_start(GTK_BOX(box_g_main), box_grid, 0,0,0);
+    gtk_box_pack_start(GTK_BOX(box_g_main), box_chat, 0,0,0);
+    gtk_stack_add_named(GTK_STACK(stack), box_g_main, "gioco");
 
-    btn_esci = gtk_button_new_with_label("Esci");
-    g_signal_connect(btn_esci, "clicked", G_CALLBACK(on_btn_esci_clicked), NULL);
+    // CSS
+    GtkCssProvider *cp = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(cp,
+        "label { color: white; font-weight: bold; font-size: 18px; }"
+        "#btn-luna { background: #ffe64d; color: #000019; font-weight: bold; border-radius: 10px; }"
+        "textview text { color: white; background: rgba(0,0,0,0.4); font-family: monospace; }"
+        "entry { background: rgba(255,255,255,0.1); color: white; border: 1px solid white; }", -1, NULL);
+    gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(cp), 800);
 
-    gtk_box_pack_start(GTK_BOX(hbox_bottoni), btn_rigioca, TRUE, TRUE, 0);
-    gtk_box_pack_start(GTK_BOX(hbox_bottoni), btn_esci, TRUE, TRUE, 0);
-    gtk_box_pack_start(GTK_BOX(vbox), hbox_bottoni, FALSE, FALSE, 5);
-    // ----------------------------------------
-
-    gtk_widget_show_all(main_window);
+    gtk_widget_show_all(win);
     gtk_main();
-    
-    close(client_socket); 
-    WSACleanup();
     return 0;
 }
