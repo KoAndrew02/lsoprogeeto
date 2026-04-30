@@ -1,8 +1,0 @@
-FROM gcc:latest
-# Copia i file necessari
-COPY server.c shared.h /app/
-WORKDIR /app
-# Compila il server (notare -lpthread)
-RUN gcc server.c -o server -lpthread
-# Comando per avviare il server
-CMD ["./server"]

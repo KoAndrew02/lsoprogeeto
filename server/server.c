@@ -5,7 +5,7 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <signal.h>
-#include "shared.h"
+#include "../shared/shared.h"
 
 typedef struct {
     int stato; int proprietario; int giocatore_stella; int giocatore_luna;
@@ -137,15 +137,32 @@ void *gestisci_client(void *arg) {
         }
         else if (p.tipo_messaggio == 1 && mia_partita != -1) { // Mossa
             pthread_mutex_lock(&mutex_server);
-            int id = mia_partita; int avv = (mio_simbolo == 'S') ? stanze[id].giocatore_luna : stanze[id].giocatore_stella;
-            stanze[id].griglia[p.mossa_x][p.mossa_y] = mio_simbolo; stanze[id].mosse_fatte++;
-            char v = controlla_vittoria(id);
-            if (v != ' ' || stanze[id].mosse_fatte == 9) {
-                stanze[id].stato = 4;
-                if(v != ' ') { invia_pacchetto(mio_socket, 3, "Vinto!", p.mossa_x, p.mossa_y, id); invia_pacchetto(avv, 4, "Perso!", p.mossa_x, p.mossa_y, id); }
-                else { invia_pacchetto(mio_socket, 5, "Pareggio!", p.mossa_x, p.mossa_y, id); invia_pacchetto(avv, 5, "Pareggio!", p.mossa_x, p.mossa_y, id); }
-            } else invia_pacchetto(avv, 1, "Tocca a te!", p.mossa_x, p.mossa_y, id);
-            pthread_mutex_unlock(&mutex_server);
+            int id = mia_partita;
+            int avv = (mio_simbolo == 'S') ? stanze[id].giocatore_luna : stanze[id].giocatore_stella;
+
+            // Validazione: Controlla se la casella è già occupata
+            if (stanze[id].griglia[p.mossa_x][p.mossa_y] != ' ') {
+                invia_pacchetto(mio_socket, 2, "Casella gia occupata!", p.mossa_x, p.mossa_y, id);
+                pthread_mutex_unlock(&mutex_server);
+            } else {
+                stanze[id].griglia[p.mossa_x][p.mossa_y] = mio_simbolo;
+                stanze[id].mosse_fatte++;
+                char v = controlla_vittoria(id);
+                if (v != ' ' || stanze[id].mosse_fatte == 9) {
+                    stanze[id].stato = 4;
+                    if(v != ' ') {
+                        invia_pacchetto(mio_socket, 3, "Vinto!", p.mossa_x, p.mossa_y, id);
+                        invia_pacchetto(avv, 4, "Perso!", p.mossa_x, p.mossa_y, id);
+                    }
+                    else {
+                        invia_pacchetto(mio_socket, 5, "Pareggio!", p.mossa_x, p.mossa_y, id);
+                        invia_pacchetto(avv, 5, "Pareggio!", p.mossa_x, p.mossa_y, id);
+                    }
+                } else {
+                    invia_pacchetto(avv, 1, "Tocca a te!", p.mossa_x, p.mossa_y, id);
+                }
+                pthread_mutex_unlock(&mutex_server);
+            }
         }
         // NUOVA LOGICA: INOLTRO CHAT
         else if (p.tipo_messaggio == 21 && mia_partita != -1) {
