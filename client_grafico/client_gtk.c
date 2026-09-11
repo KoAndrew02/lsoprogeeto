@@ -6,7 +6,7 @@
 #include <unistd.h>
 #include <winsock2.h> 
 #include <math.h> 
-#include "shared.h"
+#include "../shared/shared.h"
 
 typedef struct { int r; int c; GtkWidget *b; } DatiB;
 

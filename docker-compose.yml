@@ -3,6 +3,6 @@ services:
   server-tris:
     build:
       context: .
-      dockerfile: Dockerfile.server
+      dockerfile: server/Dockerfile.server
     ports:
       - "8081:8081" # Espone la porta 8080 sul tuo PC
