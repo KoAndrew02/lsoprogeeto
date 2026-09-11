@@ -10,6 +10,7 @@
 typedef struct {
     int stato; int proprietario; int giocatore_stella; int giocatore_luna;
     int sfidante_in_attesa; char griglia[3][3]; int mosse_fatte;
+    int rivincita_stella; int rivincita_luna;
 } Partita;
 
 Partita stanze[MAX_PARTITE];
@@ -22,6 +23,7 @@ void inizializza_server() {
         stanze[i].stato = 0; stanze[i].proprietario = -1;
         stanze[i].giocatore_stella = -1; stanze[i].giocatore_luna = -1;
         stanze[i].sfidante_in_attesa = -1;
+        stanze[i].rivincita_stella = 0; stanze[i].rivincita_luna = 0;
     }
     for(int i=0; i<MAX_CLIENTS; i++) client_connessi[i] = 0;
 }
@@ -58,20 +60,37 @@ void resetta_griglia(int id) {
         for(int c=0; c<3; c++) stanze[id].griglia[r][c] = ' ';
     }
     stanze[id].mosse_fatte = 0;
+    stanze[id].rivincita_stella = 0;
+    stanze[id].rivincita_luna = 0;
 }
 
 void abbandona_stanza(int socket, int *id_partita) {
     int id = *id_partita;
     if (id < 0 || id >= MAX_PARTITE) return;
     pthread_mutex_lock(&mutex_server);
+    
     if(stanze[id].giocatore_stella == socket) stanze[id].giocatore_stella = -1;
     if(stanze[id].giocatore_luna == socket) stanze[id].giocatore_luna = -1;
     if(stanze[id].proprietario == socket) stanze[id].proprietario = -1;
-    if(stanze[id].giocatore_stella == -1 && stanze[id].giocatore_luna == -1) stanze[id].stato = 0; 
+    
+    if(stanze[id].giocatore_stella == -1 && stanze[id].giocatore_luna == -1) {
+        stanze[id].stato = 0; 
+        char bmsg[BUFFER_SIZE]; sprintf(bmsg, "[TERMINATA] Stanza %d chiusa.", id);
+        broadcast_lobby(bmsg);
+    }
     else {
         int rimasto = (stanze[id].giocatore_stella != -1) ? stanze[id].giocatore_stella : stanze[id].giocatore_luna;
-        stanze[id].proprietario = rimasto; stanze[id].stato = 2; 
-        invia_pacchetto(rimasto, 2, "L'avversario ha lasciato.", -1, -1, id);
+        stanze[id].proprietario = rimasto; 
+        stanze[id].giocatore_stella = rimasto; 
+        stanze[id].giocatore_luna = -1;
+        stanze[id].stato = 2; 
+        
+        resetta_griglia(id);
+        
+        invia_pacchetto(rimasto, 24, "L'avversario ha abbandonato la partita.\nSei di nuovo in attesa di un nuovo sfidante...", -1, -1, id);
+        
+        char bmsg[BUFFER_SIZE]; sprintf(bmsg, "[LIBERA] Stanza %d di nuovo aperta!", id);
+        broadcast_lobby(bmsg);
     }
     *id_partita = -1; pthread_mutex_unlock(&mutex_server);
 }
@@ -80,7 +99,6 @@ void *gestisci_client(void *arg) {
     int mio_socket = *(int*)arg;
     free(arg);
     int mia_partita = -1;
-    char mio_simbolo = ' ';
 
     pthread_mutex_lock(&mutex_clienti);
     for(int i=0; i<MAX_CLIENTS; i++) { if(client_connessi[i] == 0) { client_connessi[i] = mio_socket; break; } }
@@ -88,23 +106,27 @@ void *gestisci_client(void *arg) {
 
     PacchettoRete p;
     while (recv(mio_socket, (char*)&p, sizeof(PacchettoRete), 0) > 0) {
+        char mio_simbolo = ' ';
         pthread_mutex_lock(&mutex_server);
         if (mia_partita == -1) {
             for(int i = 0; i < MAX_PARTITE; i++) {
                 if (stanze[i].giocatore_luna == mio_socket || stanze[i].giocatore_stella == mio_socket) {
-                    mia_partita = i; mio_simbolo = (stanze[i].giocatore_stella == mio_socket) ? 'S' : 'L'; break;
+                    mia_partita = i; break;
                 }
             }
         }
+        if (mia_partita != -1) { 
+            mio_simbolo = (stanze[mia_partita].giocatore_stella == mio_socket) ? 'S' : 'L';
+        }
         pthread_mutex_unlock(&mutex_server);
 
-        if (p.tipo_messaggio == 10) { // Crea
+        if (p.tipo_messaggio == 10) { 
             pthread_mutex_lock(&mutex_server);
             for(int i=0; i<MAX_PARTITE; i++) {
                 if(stanze[i].stato == 0) { 
                     stanze[i].stato = 2; stanze[i].proprietario = mio_socket; stanze[i].giocatore_stella = mio_socket;
-                    mia_partita = i; mio_simbolo = 'S'; resetta_griglia(i);
-                    char msg[BUFFER_SIZE]; sprintf(msg, "ID Stanza: %d | Sei Stella (★).", i);
+                    mia_partita = i; resetta_griglia(i);
+                    char msg[BUFFER_SIZE]; sprintf(msg, "ID Stanza: %d | Sei Host (1° Turno).", i);
                     invia_pacchetto(mio_socket, 14, msg, -1, -1, i); 
                     char bmsg[BUFFER_SIZE]; sprintf(bmsg, "[NUOVA CREAZIONE] Stanza %d libera!", i);
                     broadcast_lobby(bmsg); break;
@@ -112,30 +134,43 @@ void *gestisci_client(void *arg) {
             }
             pthread_mutex_unlock(&mutex_server);
         }
-        else if (p.tipo_messaggio == 11) { // Join
+        else if (p.tipo_messaggio == 11) { 
             pthread_mutex_lock(&mutex_server);
             int id = p.id_partita;
-            if (id >= 0 && id < MAX_PARTITE && stanze[id].stato == 2) {
-                stanze[id].sfidante_in_attesa = mio_socket;
-                invia_pacchetto(stanze[id].proprietario, 12, "Qualcuno vuole sfidarti!", -1, -1, id);
-            } else invia_pacchetto(mio_socket, 2, "Stanza non valida.", -1, -1, -1);
+            if (id >= 0 && id < MAX_PARTITE) {
+                if (stanze[id].stato == 2) {
+                    stanze[id].sfidante_in_attesa = mio_socket;
+                    invia_pacchetto(stanze[id].proprietario, 12, "Qualcuno vuole sfidarti!", -1, -1, id);
+                } else if (stanze[id].stato == 3) {
+                    invia_pacchetto(mio_socket, 25, "Errore: Partita in corso!", -1, -1, -1);
+                } else {
+                    invia_pacchetto(mio_socket, 25, "Errore: Stanza non disponibile.", -1, -1, -1);
+                }
+            } else {
+                invia_pacchetto(mio_socket, 25, "Errore: ID Stanza non valido.", -1, -1, -1);
+            }
             pthread_mutex_unlock(&mutex_server);
         }
-        else if (p.tipo_messaggio == 13) { // Risposta
+        else if (p.tipo_messaggio == 13) { 
             pthread_mutex_lock(&mutex_server);
             int id = mia_partita;
             if (id != -1 && stanze[id].sfidante_in_attesa != -1) {
                 int sfidante = stanze[id].sfidante_in_attesa;
                 if (p.mossa_x == 1) { 
                     stanze[id].giocatore_luna = sfidante; stanze[id].stato = 3; 
-                    invia_pacchetto(sfidante, 14, "Entrato! Sei Luna (☾).", -1, -1, id); 
-                    invia_pacchetto(mio_socket, 2, "Iniziata! Tocca a te (★).", -1, -1, id);
-                } else invia_pacchetto(sfidante, 15, "Rifiutato.", -1, -1, -1);
+                    invia_pacchetto(sfidante, 14, "Entrato! (2° Turno).", -1, -1, id); 
+                    invia_pacchetto(mio_socket, 2, "Iniziata! Tocca a te.", -1, -1, id);
+                    
+                    char bmsg[BUFFER_SIZE]; sprintf(bmsg, "[IN CORSO] Stanza %d occupata!", id);
+                    broadcast_lobby(bmsg);
+                } else {
+                    invia_pacchetto(sfidante, 25, "Il creatore ha rifiutato la sfida.", -1, -1, -1);
+                }
                 stanze[id].sfidante_in_attesa = -1;
             }
             pthread_mutex_unlock(&mutex_server);
         }
-        else if (p.tipo_messaggio == 1 && mia_partita != -1) { // Mossa
+        else if (p.tipo_messaggio == 1 && mia_partita != -1) { 
             pthread_mutex_lock(&mutex_server);
             int id = mia_partita; int avv = (mio_simbolo == 'S') ? stanze[id].giocatore_luna : stanze[id].giocatore_stella;
             stanze[id].griglia[p.mossa_x][p.mossa_y] = mio_simbolo; stanze[id].mosse_fatte++;
@@ -147,12 +182,34 @@ void *gestisci_client(void *arg) {
             } else invia_pacchetto(avv, 1, "Tocca a te!", p.mossa_x, p.mossa_y, id);
             pthread_mutex_unlock(&mutex_server);
         }
-        // NUOVA LOGICA: INOLTRO CHAT
-        else if (p.tipo_messaggio == 21 && mia_partita != -1) {
+        else if (p.tipo_messaggio == 21 && mia_partita != -1) { 
             pthread_mutex_lock(&mutex_server);
             int id = mia_partita;
             int avv = (mio_simbolo == 'S') ? stanze[id].giocatore_luna : stanze[id].giocatore_stella;
             if (avv != -1) invia_pacchetto(avv, 21, p.payload, -1, -1, id);
+            pthread_mutex_unlock(&mutex_server);
+        }
+        else if (p.tipo_messaggio == 22 && mia_partita != -1) {
+            pthread_mutex_lock(&mutex_server);
+            int id = mia_partita;
+            
+            if (mio_simbolo == 'S') stanze[id].rivincita_stella = 1;
+            else if (mio_simbolo == 'L') stanze[id].rivincita_luna = 1;
+
+            if (stanze[id].rivincita_stella == 1 && stanze[id].rivincita_luna == 1) {
+                resetta_griglia(id);
+                stanze[id].stato = 3;
+                invia_pacchetto(stanze[id].giocatore_stella, 23, "Rivincita! Tocca a te.", -1, -1, id);
+                invia_pacchetto(stanze[id].giocatore_luna, 23, "Rivincita! Attendi la mossa.", -1, -1, id);
+            }
+            pthread_mutex_unlock(&mutex_server);
+        }
+        // --- NUOVO: SCAMBIO SKIN ---
+        else if (p.tipo_messaggio == 26 && mia_partita != -1) {
+            pthread_mutex_lock(&mutex_server);
+            int id = mia_partita;
+            int avv = (mio_simbolo == 'S') ? stanze[id].giocatore_luna : stanze[id].giocatore_stella;
+            if (avv != -1) invia_pacchetto(avv, 26, p.payload, -1, -1, id);
             pthread_mutex_unlock(&mutex_server);
         }
         else if (p.tipo_messaggio == 16) abbandona_stanza(mio_socket, &mia_partita);
@@ -172,7 +229,7 @@ int main() {
     struct sockaddr_in addr; addr.sin_family = AF_INET;
     addr.sin_port = htons(PORT); addr.sin_addr.s_addr = INADDR_ANY;
     bind(s, (struct sockaddr*)&addr, sizeof(addr)); listen(s, 10);
-    printf("Server Tris v11 (Chat Attiva) in ascolto...\n");
+    printf("Server Tris v16 (Custom Skin Attive) in ascolto...\n");
     while (1) {
         struct sockaddr_in c_addr; socklen_t size = sizeof(c_addr);
         int client_s = accept(s, (struct sockaddr*)&c_addr, &size);
