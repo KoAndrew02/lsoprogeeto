@@ -46,7 +46,7 @@ Per compilare ed eseguire il progetto localmente:
    ```bash
    docker-compose up --build -d
    ```
-3. Il server sarà in ascolto sulla porta TCP `8080`.
+3. Il server sarà in ascolto sulla porta TCP `8081`.
 4. Puoi ora lanciare i client grafici o da terminale sulla tua macchina host per connetterti al server (IP `127.0.0.1`).
 
 ---
@@ -65,16 +65,12 @@ gcc server/server.c -o server/server -lpthread
 ```
 
 ### 2. Avvio del Client Grafico GTK
-Assicurati di eseguire il comando direttamente dall'interno della cartella del client per permettere al programma di trovare gli asset (immagini png).
+Compila e avvia il client dalla **cartella principale** del progetto: le immagini delle skin (`stella.png`, `stella2.png`, `luna.png`, `luna2.png`) si trovano lì e il programma le cerca nella cartella da cui viene lanciato.
+
+**Windows** (terminale *MSYS2 MinGW64*, dopo aver installato GTK3 con `pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-gtk3 mingw-w64-x86_64-pkgconf`):
 ```bash
-# Entra nella directory
-cd client_grafico
-
-# Compilazione
-gcc client_gtk.c -o client_gtk `pkg-config --cflags --libs gtk+-3.0` -lpthread -lm
-
-# Esecuzione
-./client_gtk
+gcc client_grafico/client_gtk.c -o client_gtk.exe $(pkg-config --cflags --libs gtk+-3.0) -lws2_32 -lpthread -lm
+./client_gtk.exe
 ```
 
 ### 3. Avvio del Client da Terminale
