@@ -3,7 +3,7 @@ Il progetto è diviso in:
               definisce la porta di rete(PORT), i limiti massimi e la struttura dati binaria PacchettoRete(Composto da tipo_messaggio), 
               coordinate mossa_x/mossa_y, id_partita e stringa payload che viaggia sui socket TCP
 
-    server.c e Dockefile.server: è il motore centrale, compilabile e eseguibile in un container Linux tramite DOcker
+    server/ (server.c e Dockerfile): è il motore centrale, compilabile e eseguibile in un container Linux tramite DOcker
                                  Utilizza un thread detached, cioé un thread configurato in modo tale che le sue risorse di sistema vengano liberate 
                                  automaticamente dal sistema operativo non appena termina,per ogni giocatore connesso e protegge l'accesso alle strutture 
                                  globali(stanze e client_connessi) tramite due pthread:mutex_t.
@@ -12,23 +12,19 @@ Il progetto è diviso in:
                                  di partita(21), richiesta di rivincita(22), sincronizzazione delle skin(26) e abbandono/riapertura della stanza(16).
                                  Invia aggiornamenti in broeadcast a tutti i client connessi quando una stanza viene creata, occupata o liberata(tipo 20)
 
-    client_grafico/ (client_gtk.c): È l'interfaccia grafica desktop sviluppata con GTK3 e Winsock2 (compilata nell'eseguibile Windows client_gtk.exe presente
-                                    nella root).  
-                                    Disegna uno sfondo procedurale notturno con stelle e falce di luna tramite la libreria Cairo (on_draw) e applica uno 
-                                    stile CSS personalizzato.
+    client_grafico/ (client_gtk.c, client_gtk.exe e immagini): È l'interfaccia grafica desktop sviluppata con GTK3 e Winsock2 (compilata nell'eseguibile
+                                    Windows client_gtk.exe nella stessa cartella, insieme alle skin stella.png, stella2.png, luna.png e luna2.png).
+                                    Disegna uno sfondo procedurale animato tramite la libreria Cairo (on_draw, ridisegnato ogni 33 ms da timer_sfondo):
+                                    120 stelle che scendono e una luna che attraversa il cielo cambiando fase. Applica uno stile CSS personalizzato.
                                     Utilizza un GtkStack per alternare due viste: la Lobby (creazione stanza, inserimento ID per unirsi e bacheca annunci in
                                     tempo reale) e la Partita (griglia $3 \times 3$ cliccabile, etichetta di stato e chat in-game).
-                                    Separa la rete dalla UI tramite un thread dedicato (thread_ascolto) che riceve i pacchetti dal server e li accoda al 
+                                    A inizio partita fa scegliere l'avatar fra 4 skin (scegli_skin) e la comunica all'avversario (tipo 26).
+                                    A fine partita evidenzia in verde il tris vincente (trova_e_colora_tris), mostra i fuochi d'artificio a chi vince
+                                    (200 particelle con gravità e dissolvenza) e propone la rivincita (tipo 22).
+                                    Separa la rete dalla UI tramite un thread dedicato (thread_ascolto) che riceve i pacchetti dal server e li accoda al
                                     ciclo principale di GTK tramite g_idle_add(gestisci_rete, ...), evitando blocchi dell'interfaccia.
-                                    Carica le icone stella.png e luna.png per rappresentare i simboli sulla griglia.   
-                                     
-    client_terminale/ (client.c, Dockerfile.client): È un client testuale multipiattaforma (compatibile sia con Windows Winsock sia con sistemi POSIX/Linux)
-                                                     utilizzato per testare la connessione TCP (127.0.0.1 o hostname passato da riga di comando, come il nome
-                                                     del servizio nel docker-compose.yml) e lo scambio sincrono di pacchetti PacchettoRete direttamente da 
-                                                     console.   
-    
-    Root del progetto: Contiene docker-compose.yml per orchestrare l'avvio dei container, il README.md e gli asset grafici (stella.png, stella2.png, luna.png, 
-                       luna2.png).   
+
+    Root del progetto: Contiene docker-compose.yml per avviare il server in un container, il README.md e la cartella docs/ con questa spiegazione.
 
 Tris Stellare è un sistema client-server multithread sviluppato in C.
 L'intero progetto è progettato su un'architettura modulare distribuita che separa la logica di business dalla presentazione, comunicando tramite socket TCP e un
@@ -39,16 +35,13 @@ Gestisce contemporaneamente più client e più partite parallele attraverso un m
 detached dedicato (gestisci_client). La coerenza dei dati condivisi — come l'array delle stanze e la lista dei giocatori connessi — è garantita dalla 
 sincronizzazione tramite mutex (mutex_server e mutex_clienti), evitando race condition durante le mosse o le richieste di accesso.   
 
-Client Grafico (client_gtk.c): È un'applicazione desktop sviluppata con GTK3 e Winsock2. L'interfaccia si distingue per uno sfondo procedurale disegnato tramite
-la libreria Cairo (cielo stellato con falce di luna) e uno styling CSS personalizzato. Per garantire la massima reattività ed evitare che l'attesa dei dati di
-rete blocchi la finestra, il client separa l'ascolto in un thread secondario (thread_ascolto) che delega gli aggiornamenti grafici al main loop di GTK tramite
-g_idle_add.   
+Client Grafico (client_gtk.c): È un'applicazione desktop sviluppata con GTK3 e Winsock2. L'interfaccia si distingue per uno sfondo procedurale animato
+disegnato tramite la libreria Cairo (stelle che scendono e luna con le sue fasi), per i fuochi d'artificio alla vittoria e per uno styling CSS personalizzato.
+Per garantire la massima reattività ed evitare che l'attesa dei dati di rete blocchi la finestra, il client separa l'ascolto in un thread secondario
+(thread_ascolto) che delega gli aggiornamenti grafici al main loop di GTK tramite g_idle_add.
 
-Client Testuale (client.c): È un client da riga di comando multipiattaforma (compatibile sia con Windows che con Linux), utile per il debug, il 
-collaudo rapido delle connessioni TCP e la verifica dello scambio dei pacchetti in ambiente Docker.   
-
-Infrastruttura Docker: Attraverso Dockerfile.server, Dockerfile.client e docker-compose.yml, l'architettura è pronta per essere orchestrata in container 
-isolati, semplificando la compilazione e l'esecuzione del server.   
+Infrastruttura Docker: Attraverso server/Dockerfile e docker-compose.yml il server viene compilato ed eseguito in un container isolato, semplificandone
+l'avvio su qualsiasi sistema.
 
 Funzionalità PrincipaliGestione Lobby e Bacheca Annunci in Tempo Reale: Appena connessi, i giocatori accedono alla lobby. Ogni volta che una stanza viene 
 creata, occupata o liberata, il server invia un messaggio in broadcast a tutti i client connessi aggiornando in tempo reale la bacheca degli annunci.
@@ -68,6 +61,9 @@ Gestione Dinamica degli Abbandoni e Disconnessioni: Se un giocatore esce volonta
 (anche ignorando il segnale SIGPIPE per evitare crash improvvisi): se la stanza resta vuota viene chiusa, mentre se rimane un giocatore questi viene promosso
 ad host e la stanza torna aperta per un nuovo sfidante.
 
-Supporto a Rivincite e Personalizzazione Estetica (Skin): A livello di protocollo server, il sistema integra già la logica per la richiesta e l'avvio 
-sincronizzato della rivincita a fine partita (azzerando la griglia solo quando entrambi i giocatori acconsentono) e il supporto allo scambio di skin 
-alternative per i simboli (stella2.png e luna2.png).   
+Rivincite e Personalizzazione Estetica (Skin): A fine partita il client chiede se giocare la rivincita; il server la avvia in modo sincronizzato
+(azzerando la griglia solo quando entrambi i giocatori acconsentono) e il client inverte i turni. A inizio partita ogni giocatore sceglie il proprio avatar
+fra Stella Classica, Stella Speciale, Luna Classica e Luna Scura (stella.png, stella2.png, luna.png, luna2.png) e il server lo inoltra all'avversario.
+
+Fuochi d'Artificio e Tris Vincente: Quando un giocatore vince, il client colora di verde le tre caselle del tris e anima sullo sfondo dei fuochi d'artificio:
+esplosioni casuali da 40 particelle colorate che si allargano, ricadono per effetto della gravità e svaniscono.

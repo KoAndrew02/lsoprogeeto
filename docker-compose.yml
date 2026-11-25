@@ -1,8 +1,8 @@
-version: '3.8'
 services:
   server-tris:
     build:
-      context: .
-      dockerfile: server/Dockerfile.server
+      context: .                    # Serve la root per copiare sia server/ sia shared/
+      dockerfile: server/Dockerfile
     ports:
-      - "8081:8081" # Espone la porta 8080 sul tuo PC
+      - "8081:8081"                 # Espone la porta 8081 del server sul tuo PC
+    restart: unless-stopped

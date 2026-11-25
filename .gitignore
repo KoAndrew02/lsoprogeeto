@@ -1,0 +1,9 @@
+# Eseguibili compilati in locale (client_grafico/client_gtk.exe resta tracciato: è la build di riferimento)
+server/server
+server/server_app
+client_grafico/client_gtk
+*.o
+
+# File di sistema
+.DS_Store
+Thumbs.db

@@ -1,6 +1,6 @@
 /*
     Client grafico GTK di Tris Stellare.
-    Il sorgente corrisponde al client_gtk.exe presente nella root (ricostruito dall'eseguibile):
+    Il sorgente corrisponde al client_gtk.exe presente in questa cartella (ricostruito dall'eseguibile):
     stesse funzioni, stesse stringhe, stesse costanti e stessa logica.
     Contiene: sfondo animato (stelle che scendono e luna che attraversa il cielo cambiando fase),
     fuochi d'artificio alla vittoria, evidenziazione del tris vincente, scelta dell'avatar,
@@ -12,7 +12,13 @@
 #include <stdlib.h>        // Fornisce funzioni generali, come malloc, free, atoi e rand.
 #include <string.h>        // Fornisce funzioni per manipolare stringhe e memoria.
 #include <unistd.h>        // Importa funzioni POSIX; viene incluso anche se qui non è usato direttamente.
-#include <winsock2.h>      // Fornisce le API Windows per la comunicazione tramite socket.
+#ifdef _WIN32              // Su Windows (MSYS2/MinGW)...
+#include <winsock2.h>      // ...fornisce le API Windows per la comunicazione tramite socket.
+#else                      // Su macOS e Linux...
+#include <sys/socket.h>    // ...usa le socket POSIX (socket, connect, send, recv).
+#include <netinet/in.h>    // Definisce struct sockaddr_in e htons.
+#include <arpa/inet.h>     // Definisce inet_addr.
+#endif
 #include <math.h>          // Fornisce costanti e funzioni matematiche, tra cui M_PI, cos e sin.
 #include "../shared/shared.h" // Condivide porta e formato dei pacchetti di rete con client e server.
 
@@ -534,8 +540,10 @@ l’avvio del ciclo di GTK.
 Avvio e connessione Winsock
 */
 int main(int argc, char *argv[]) {
+#ifdef _WIN32              // Winsock va inizializzato solo su Windows; su macOS e Linux le socket sono pronte all'uso.
     WSADATA wsa; // Dichiara la struttura con le informazioni iniziali di Winsock.
     WSAStartup(MAKEWORD(2,2), &wsa); // Avvia Winsock nella versione 2.2.
+#endif
     client_socket = socket(AF_INET, SOCK_STREAM, 0); // Crea un socket TCP per comunicare con il server.
     struct sockaddr_in a; // Dichiara la struttura con l'indirizzo IPv4 del server.
     a.sin_family=AF_INET; // Specifica che l'indirizzo usa il protocollo IPv4.

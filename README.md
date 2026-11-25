@@ -1,98 +1,100 @@
-# Tris Stellare
+# 🌙 Tris Stellare ⭐
 
-Un'applicazione client-server multiplayer del classico gioco del Tris (Tic-Tac-Toe), sviluppata in C. Il progetto supporta stanze di gioco parallele, matchmaking tramite lobby, chat integrata e due tipologie di client: un'interfaccia grafica (GTK3) e un client da terminale.
+Tris (Tic-Tac-Toe) multiplayer client-server scritto in C: stanze di gioco parallele, lobby con bacheca annunci in tempo reale, chat di partita, scelta dell'avatar, rivincita e fuochi d'artificio per chi vince.
 
-## Panoramica del Sistema
+## Struttura del progetto
 
-Il progetto è strutturato secondo il paradigma Client-Server:
-*   **Server Centrale (`server/server.c`)**: Un server TCP multithread concorrente. Mantiene lo stato del gioco, autorizza le azioni, elabora le regole (vittoria/pareggio) e gestisce il routing dei messaggi di chat.
-*   **Client Grafico (`client_grafico/client_gtk.c`)**: Interfaccia asincrona basata su GTK3. Offre un'esperienza visiva ricca e gestisce l'I/O con l'utente delegando la rete a un thread POSIX dedicato.
-*   **Client Terminale (`client_terminale/client.c`)**: Alternativa CLI leggera per interagire con il sistema da riga di comando.
-*   **Modulo Condiviso (`shared/shared.h`)**: Header file che contiene la struct `PacchettoRete`, il protocollo applicativo customizzato a dimensione fissa per la comunicazione tra i nodi.
+```
+.
+├── client_grafico/
+│   ├── client_gtk.c       # Client grafico GTK3 (Windows con Winsock2, macOS/Linux con socket POSIX)
+│   ├── client_gtk.exe     # Build Windows di riferimento
+│   ├── stella.png         # Skin: Stella Classica
+│   ├── stella2.png        # Skin: Stella Speciale
+│   ├── luna.png           # Skin: Luna Classica
+│   └── luna2.png          # Skin: Luna Scura
+├── server/
+│   ├── server.c           # Server TCP multithread
+│   └── Dockerfile         # Immagine Docker del server
+├── shared/
+│   └── shared.h           # Protocollo comune (porta e struct PacchettoRete)
+├── docs/
+│   └── spiegazione.txt    # Descrizione dettagliata dei moduli
+└── docker-compose.yml     # Avvio del server con Docker
+```
 
-## Tecnologie Utilizzate
+## Componenti
 
-*   **Linguaggio C (C99/C11)**: Utilizzato per massimizzare le performance e per il controllo di basso livello.
-*   **Socket API (TCP/IP)**: Gestione della comunicazione affidabile in rete.
-*   **Pthreads e Mutex**: Gestione della concorrenza sul server per servire client simultanei proteggendo la memoria condivisa.
-*   **GTK+ 3 & Cairo**: Framework per la UI e libreria grafica per il rendering procedurale dello sfondo spaziale.
-*   **Docker & Docker Compose**: Per il deployment automatizzato e isolato del server.
+* **Server (`server/server.c`)**: server TCP concorrente. Crea un thread *detached* per ogni client e protegge le strutture condivise (`stanze`, `client_connessi`) con due mutex. Mantiene lo stato autorevole della partita: valida le mosse, gestisce i turni, rileva vittoria e pareggio, inoltra chat e skin, coordina rivincite e abbandoni.
+* **Client grafico (`client_grafico/client_gtk.c`)**: interfaccia GTK3. Un thread secondario riceve i pacchetti dal server e li passa al main loop GTK con `g_idle_add`, così la finestra non si blocca mai.
+  * Sfondo animato con Cairo: stelle che scendono e una luna che attraversa il cielo cambiando fase.
+  * Fuochi d'artificio a particelle quando vinci, tris vincente evidenziato in verde.
+  * Scelta dell'avatar a inizio partita fra 4 skin, sincronizzata con l'avversario.
+  * Dialoghi gialli "a nuvola" per sfide, errori, fine partita e rivincita.
+* **Protocollo (`shared/shared.h`)**: ogni messaggio è una `PacchettoRete` a dimensione fissa (tipo, coordinate, id partita, payload di 256 byte). Il client ricompone i pacchetti anche se TCP li spezza.
 
-## Scelte Implementative
+### Tipi di messaggio
 
-*   **Architettura "Server-Authoritative":** I client fungono esclusivamente da terminali di I/O. L'intera logica arbitrale (validazione delle mosse, turnazione, fine partita) è centralizzata sul server per prevenire desincronizzazioni e trucchi (cheat) da parte dei client.
-*   **Protocollo a Dimensione Fissa (`PacchettoRete`):** La comunicazione avviene tramite lo scambio di pacchetti binari (struct C) a dimensione fissa, eliminando l'overhead di parsing testuale (es. JSON) e risolvendo i problemi di frammentazione TCP.
-*   **Concorrenza Multithread "Detached":** Ogni nuova connessione client viene gestita da un thread indipendente in modalità *detached*, permettendo al sistema operativo di recuperare automaticamente le risorse alla disconnessione e prevenendo memory leak.
-*   **Protezione della Memoria Condivisa tramite Mutex:** L'accesso alle strutture dati globali (array `stanze` e `client_connessi`) è rigorosamente sincronizzato tramite `pthread_mutex_lock/unlock` per evitare *race conditions*.
-*   **Disaccoppiamento tra Rete e GUI:** Nel client grafico, per evitare il congelamento dell'interfaccia durante le operazioni di rete bloccanti (`recv`), l'ascolto dei socket è demandato a un thread secondario, mentre gli aggiornamenti visivi vengono iniettati nel main loop GTK tramite `g_idle_add`.
-*   **Rendering Procedurale degli Asset (Cairo):** Lo sfondo stellato viene generato matematicamente a runtime, permettendo all'interfaccia di essere scalabile e leggera senza dover caricare file immagine raster pesanti.
-*   **Compatibilità Cross-Platform:** Il client da terminale utilizza direttive del preprocessore (`#ifdef _WIN32`) per includere dinamicamente `winsock2.h` su Windows o le socket POSIX su Linux/macOS.
+| Tipo | Significato | Tipo | Significato |
+|---|---|---|---|
+| 1 | Mossa | 16 | Uscita dalla stanza |
+| 2 | Partita iniziata (all'host) | 20 | Annuncio in bacheca |
+| 3 / 4 / 5 | Vittoria / sconfitta / pareggio | 21 | Chat |
+| 10 | Crea stanza | 22 / 23 | Richiesta / avvio rivincita |
+| 11 | Unisciti a una stanza | 24 | Avversario uscito, si torna in attesa |
+| 12 / 13 | Sfida in arrivo / risposta | 25 | Errore |
+| 14 | Ingresso in partita | 26 | Skin scelta |
 
----
+## Avvio
 
-## Prerequisiti
+### 1. Server (Docker, consigliato)
 
-Per compilare ed eseguire il progetto localmente:
-*   **GCC**: Compilatore C standard.
-*   **Librerie di sviluppo GTK3**: Necessarie per il client grafico. 
-    *   Ubuntu/Debian: `sudo apt install libgtk-3-dev`
-    *   Fedora: `sudo dnf install gtk3-devel`
-*   **Docker e Docker Compose** (Opzionale, consigliato per il server).
-
-## Esecuzione tramite Docker (Metodo Consigliato)
-
-1. Apri un terminale nella cartella principale del progetto.
-2. Avvia i container in background:
-   ```bash
-   docker-compose up --build -d
-   ```
-3. Il server sarà in ascolto sulla porta TCP `8081`.
-4. Puoi ora lanciare i client grafici o da terminale sulla tua macchina host per connetterti al server (IP `127.0.0.1`).
-
----
-
-## Compilazione ed Esecuzione Manuale
-
-Apri terminali separati nella directory radice del progetto per compilare e avviare manualmente i moduli.
-
-### 1. Avvio del Server Centrale (Linux/macOS)
+Dalla cartella principale del progetto:
 ```bash
-# Compilazione
-gcc server/server.c -o server/server -lpthread
+docker compose up --build -d
+```
+Il server resta in ascolto sulla porta TCP `8081`. Per fermarlo: `docker compose down`.
 
-# Esecuzione
+In alternativa, su Linux o macOS senza Docker:
+```bash
+gcc server/server.c -o server/server -lpthread
 ./server/server
 ```
 
-### 2. Avvio del Client Grafico GTK
-Compila e avvia il client dalla **cartella principale** del progetto: le immagini delle skin (`stella.png`, `stella2.png`, `luna.png`, `luna2.png`) si trovano lì e il programma le cerca nella cartella da cui viene lanciato.
+### 2. Client grafico (Windows)
 
-**Windows** (terminale *MSYS2 MinGW64*, dopo aver installato GTK3 con `pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-gtk3 mingw-w64-x86_64-pkgconf`):
+Serve [MSYS2](https://www.msys2.org/). Nel terminale **MSYS2 MinGW64** installa una volta compilatore e GTK3:
 ```bash
-gcc client_grafico/client_gtk.c -o client_gtk.exe $(pkg-config --cflags --libs gtk+-3.0) -lws2_32 -lpthread -lm
+pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-gtk3 mingw-w64-x86_64-pkgconf
+```
+Poi compila e avvia **dalla cartella `client_grafico`** (il client cerca le immagini delle skin nella cartella da cui parte):
+```bash
+cd client_grafico
+gcc client_gtk.c -o client_gtk.exe $(pkg-config --cflags --libs gtk+-3.0) -lws2_32 -lpthread -lm
 ./client_gtk.exe
 ```
+### 3. Client grafico (macOS)
 
-### 3. Avvio del Client da Terminale
+Installa una volta GTK3 con [Homebrew](https://brew.sh/):
 ```bash
-# Compilazione (Linux/macOS)
-gcc client_terminale/client.c -o client_terminale/client
-
-# Compilazione (Windows - tramite MinGW)
-# gcc client_terminale/client.c -o client_terminale/client.exe -lws2_32
-
-# Esecuzione (specificando l'IP del server, default: 127.0.0.1)
-./client_terminale/client 127.0.0.1
+brew install gtk+3 pkgconf
 ```
+Poi, sempre dalla cartella `client_grafico`:
+```bash
+cd client_grafico
+gcc client_gtk.c -o client_gtk $(pkg-config --cflags --libs gtk+-3.0) -lpthread -lm
+./client_gtk
+```
+Lo stesso comando funziona anche su Linux (con `libgtk-3-dev` installato).
 
----
+Il client si collega al server su `127.0.0.1:8081`, quindi server e client devono girare sullo stesso computer. Per giocare apri due client.
 
-## Come Giocare
+## Come si gioca
 
-1. **Lobby Multigiocatore:** All'avvio del client grafico, accederai alla Lobby. La "Bacheca Annunci" mostrerà la creazione o liberazione di stanze da parte del server.
-2. **Crea o Partecipa:** 
-   * **Crea Nuova Partita**: Apre una stanza e ti imposta come Proprietario (Host).
-   * **Unisciti**: Inserisci l'ID numerico di una stanza esistente e clicca il pulsante per lanciare una sfida. L'Host riceverà un pop-up per accettare o rifiutare.
-3. **Gameplay:** Il server impone turni rigidi. Il tuo cursore sarà bloccato quando tocca all'avversario. Clicca su una casella vuota per fare la tua mossa.
-4. **Chat In-Game:** Usa il box sulla destra per inviare messaggi istantanei al tuo avversario. La chat è privata e limitata alla singola stanza di gioco.
-5. **Fine Partita:** Quando un giocatore vince, o la griglia è piena, viene dichiarata la fine della partita. Se uno dei giocatori preme "Esci" o chiude il programma, l'altro rimarrà come nuovo Host e la stanza verrà ripulita e rimessa in bacheca.
+1. **Lobby**: la bacheca mostra in tempo reale le stanze create, occupate e liberate.
+2. **Crea Nuova Partita**: apri una stanza e diventi l'host (Stella, primo turno).
+3. **Unisciti**: inserisci l'ID di una stanza e sfida l'host, che può accettare o rifiutare. Chi entra gioca come Luna.
+4. **Avatar**: a inizio partita entrambi scelgono la propria skin fra Stella Classica, Stella Speciale, Luna Classica e Luna Scura.
+5. **Partita**: il server impone i turni, la griglia è bloccata quando tocca all'avversario. A destra c'è la chat privata della stanza.
+6. **Fine partita**: il tris vincente si colora di verde e chi vince vede i fuochi d'artificio. Si può chiedere la rivincita: riparte solo se accettano entrambi, a turni invertiti.
+7. **Abbandono**: se l'avversario esce, chi resta torna host e la stanza ritorna in bacheca.
