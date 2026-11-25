@@ -1,0 +1,73 @@
+Il progetto è diviso in:
+    shared.h: che è il contratto di comunicazione da tutti gli eseguibili.
+              definisce la porta di rete(PORT), i limiti massimi e la struttura dati binaria PacchettoRete(Composto da tipo_messaggio), 
+              coordinate mossa_x/mossa_y, id_partita e stringa payload che viaggia sui socket TCP
+
+    server.c e Dockefile.server: è il motore centrale, compilabile e eseguibile in un container Linux tramite DOcker
+                                 Utilizza un thread detached, cioé un thread configurato in modo tale che le sue risorse di sistema vengano liberate 
+                                 automaticamente dal sistema operativo non appena termina,per ogni giocatore connesso e protegge l'accesso alle strutture 
+                                 globali(stanze e client_connessi) tramite due pthread:mutex_t.
+                                 Gestisce l'intero ciclo di vita delle stanze: creazione(tipo 10), richiesta di sfida(11), accettazione o rifiuto da
+                                 parte dell'host(13), validazione delle mosse e controllo delle condizioni da parte dell'host(1, 2, 3, 4, 5), chat privata 
+                                 di partita(21), richiesta di rivincita(22), sincronizzazione delle skin(26) e abbandono/riapertura della stanza(16).
+                                 Invia aggiornamenti in broeadcast a tutti i client connessi quando una stanza viene creata, occupata o liberata(tipo 20)
+
+    client_grafico/ (client_gtk.c): È l'interfaccia grafica desktop sviluppata con GTK3 e Winsock2 (compilata nell'eseguibile Windows client_gtk.exe presente
+                                    nella root).  
+                                    Disegna uno sfondo procedurale notturno con stelle e falce di luna tramite la libreria Cairo (on_draw) e applica uno 
+                                    stile CSS personalizzato.
+                                    Utilizza un GtkStack per alternare due viste: la Lobby (creazione stanza, inserimento ID per unirsi e bacheca annunci in
+                                    tempo reale) e la Partita (griglia $3 \times 3$ cliccabile, etichetta di stato e chat in-game).
+                                    Separa la rete dalla UI tramite un thread dedicato (thread_ascolto) che riceve i pacchetti dal server e li accoda al 
+                                    ciclo principale di GTK tramite g_idle_add(gestisci_rete, ...), evitando blocchi dell'interfaccia.
+                                    Carica le icone stella.png e luna.png per rappresentare i simboli sulla griglia.   
+                                     
+    client_terminale/ (client.c, Dockerfile.client): È un client testuale multipiattaforma (compatibile sia con Windows Winsock sia con sistemi POSIX/Linux)
+                                                     utilizzato per testare la connessione TCP (127.0.0.1 o hostname passato da riga di comando, come il nome
+                                                     del servizio nel docker-compose.yml) e lo scambio sincrono di pacchetti PacchettoRete direttamente da 
+                                                     console.   
+    
+    Root del progetto: Contiene docker-compose.yml per orchestrare l'avvio dei container, il README.md e gli asset grafici (stella.png, stella2.png, luna.png, 
+                       luna2.png).   
+
+Tris Stellare è un sistema client-server multithread sviluppato in C.
+L'intero progetto è progettato su un'architettura modulare distribuita che separa la logica di business dalla presentazione, comunicando tramite socket TCP e un
+protocollo applicativo personalizzato (PacchettoRete definito in shared.h):
+
+Server Concorrente (server.c): È il cuore logico del sistema, progettato per essere eseguito su ambienti POSIX/Linux (anche tramite Docker). 
+Gestisce contemporaneamente più client e più partite parallele attraverso un modello multi-thread (pthread): per ogni nuova connessione viene creato un thread 
+detached dedicato (gestisci_client). La coerenza dei dati condivisi — come l'array delle stanze e la lista dei giocatori connessi — è garantita dalla 
+sincronizzazione tramite mutex (mutex_server e mutex_clienti), evitando race condition durante le mosse o le richieste di accesso.   
+
+Client Grafico (client_gtk.c): È un'applicazione desktop sviluppata con GTK3 e Winsock2. L'interfaccia si distingue per uno sfondo procedurale disegnato tramite
+la libreria Cairo (cielo stellato con falce di luna) e uno styling CSS personalizzato. Per garantire la massima reattività ed evitare che l'attesa dei dati di
+rete blocchi la finestra, il client separa l'ascolto in un thread secondario (thread_ascolto) che delega gli aggiornamenti grafici al main loop di GTK tramite
+g_idle_add.   
+
+Client Testuale (client.c): È un client da riga di comando multipiattaforma (compatibile sia con Windows che con Linux), utile per il debug, il 
+collaudo rapido delle connessioni TCP e la verifica dello scambio dei pacchetti in ambiente Docker.   
+
+Infrastruttura Docker: Attraverso Dockerfile.server, Dockerfile.client e docker-compose.yml, l'architettura è pronta per essere orchestrata in container 
+isolati, semplificando la compilazione e l'esecuzione del server.   
+
+Funzionalità PrincipaliGestione Lobby e Bacheca Annunci in Tempo Reale: Appena connessi, i giocatori accedono alla lobby. Ogni volta che una stanza viene 
+creata, occupata o liberata, il server invia un messaggio in broadcast a tutti i client connessi aggiornando in tempo reale la bacheca degli annunci.
+
+Creazione Stanze e Sistema di Sfida (Matchmaking):Un utente può creare una nuova stanza diventandone l'Host (a cui viene assegnato automaticamente il simbolo 
+Stella e il primo turno), oppure può inserire l'ID di una stanza esistente per inviare una richiesta di sfida. L'host riceve un popup modale e può decidere se 
+accettare o rifiutare lo sfidante (che assumerà il ruolo di Luna).
+
+Logica di Gioco e Validazione Centralizzata: Il server mantiene lo stato autorevole della griglia $3 \times 3$, impedisce mosse su caselle già occupate, 
+alterna i turni disabilitando la griglia al giocatore in attesa e verifica automaticamente le condizioni di vittoria (righe, colonne, diagonali) o di 
+pareggio.
+
+Chat Privata In-Game: Durante la partita, i due sfidanti dispongono di una chat dedicata affiancata alla griglia di gioco per scambiarsi messaggi in tempo 
+reale, inoltrati selettivamente dal server solo ai due partecipanti della stanza.
+
+Gestione Dinamica degli Abbandoni e Disconnessioni: Se un giocatore esce volontariamente dalla stanza o perde la connessione, il server rileva l'evento 
+(anche ignorando il segnale SIGPIPE per evitare crash improvvisi): se la stanza resta vuota viene chiusa, mentre se rimane un giocatore questi viene promosso
+ad host e la stanza torna aperta per un nuovo sfidante.
+
+Supporto a Rivincite e Personalizzazione Estetica (Skin): A livello di protocollo server, il sistema integra già la logica per la richiesta e l'avvio 
+sincronizzato della rivincita a fine partita (azzerando la griglia solo quando entrambi i giocatori acconsentono) e il supporto allo scambio di skin 
+alternative per i simboli (stella2.png e luna2.png).   
